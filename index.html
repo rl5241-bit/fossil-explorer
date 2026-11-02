@@ -157,6 +157,7 @@ dialog>div{position:relative}
 
 <footer>
   Specimen records and photos come from museum collections through <a href="https://www.gbif.org" target="_blank" rel="noopener">GBIF</a>, the Global Biodiversity Information Facility. Each fossil's page lists the museum, photographer and license, and links back to the original record. Map tiles &copy; OpenStreetMap contributors.
+<br>If GBIF is not responding, the site switches automatically to Wikimedia Commons fossil photos. Those records have less detail (often no exact location).
 </footer>
 </div>
 
@@ -201,7 +202,7 @@ var AUSTIN="POLYGON((-98.9 29.6,-96.7 29.6,-96.7 31.1,-98.9 31.1,-98.9 29.6))";
 var LICS={"http://creativecommons.org/publicdomain/zero/1.0/legalcode":"CC0 (public domain)","http://creativecommons.org/licenses/by/4.0/legalcode":"CC BY 4.0","http://creativecommons.org/licenses/by-nc/4.0/legalcode":"CC BY-NC 4.0"};
 
 var $=function(id){return document.getElementById(id)};
-var state={period:"",offset:0,total:0,items:[],busy:false,seq:0,view:"grid"};
+var state={src:"gbif",gbifDownUntil:0,period:"",offset:0,total:0,items:[],busy:false,seq:0,view:"grid"};
 var map=null,layer=null;
 
 /* MD5 (needed to build GBIF's image-cache address for a photo) */
@@ -210,6 +211,7 @@ function md5(s){function L(k,d){return(k<<d)|(k>>>(32-d))}function K(G,k){var I,
 function el(tag,cls,text){var e=document.createElement(tag);if(cls)e.className=cls;if(text!=null)e.textContent=text;return e}
 
 function imgUrl(o,size){
+  if(o.src==="commons")return size==="300x"?o.thumb:size==="800x"?o.thumb.replace(/\/\d+px-/,"/960px-"):o.img;
   var h=md5(o.img);
   return API+"image/cache/"+(size?size+"/":"")+"occurrence/"+o.key+"/media/"+h;
 }
@@ -240,6 +242,66 @@ function simplify(r){
   };
 }
 
+
+/* Backup source: Wikimedia Commons (used automatically when GBIF does not answer) */
+var CM="https://commons.wikimedia.org/w/api.php";
+var CM_GROUPS={"9273948":"trilobite","136":"ammonite","137":"bivalve fossil","225":"gastropod fossil","110":"brachiopod","206":"coral fossil","215":"crinoid","221":"sea urchin fossil","50":"echinoderm fossil","121":"shark tooth fossil","359":"mammal fossil","11418114":"turtle fossil","212":"bird fossil","216":"insect fossil","6":"plant fossil","105":"sponge fossil","53":"bryozoan fossil"};
+function plain(s){if(!s)return "";return (new DOMParser().parseFromString(String(s),"text/html").body.textContent||"").replace(/\s+/g," ").trim()}
+function cmSearch(){
+  var p=["fossil"];
+  if(state.period)p.push(state.period);
+  var g=CM_GROUPS[$("grp").value];if(g)p.push(g);
+  var q=$("q").value.trim();if(q)p.push(q);
+  var rg=$("reg").value;
+  if(rg==="tx")p.push("Texas");
+  if(rg==="atx")p.push("Austin Texas");
+  return p.join(" ")+" filetype:bitmap";
+}
+function cmPeriod(txt){
+  if(state.period)return state.period;
+  for(var i=0;i<PERIODS.length;i++){if(new RegExp("\\b"+PERIODS[i][0]+"\\b","i").test(txt))return PERIODS[i][0]}
+  return "";
+}
+function simplifyCm(p){
+  var ii=(p.imageinfo||[])[0];if(!ii||!ii.thumburl)return null;
+  var x=ii.extmetadata||{};
+  function mv(k){return x[k]?plain(x[k].value):""}
+  var title=(p.title||"").replace(/^File:/,"").replace(/\.[A-Za-z0-9]+$/,"").replace(/_/g," ");
+  var nm=mv("ObjectName")||title;
+  var desc=mv("ImageDescription");
+  var lat=parseFloat(mv("GPSLatitude")),lng=parseFloat(mv("GPSLongitude"));
+  return {
+    key:p.pageid,src:"commons",page:ii.descriptionurl,thumb:ii.thumburl,img:ii.url,
+    name:nm.length>90?nm.slice(0,87)+"…":nm,italic:false,group:"",
+    period:cmPeriod(title+" "+desc),epoch:"",era:"",formation:"",
+    place:"",short:"",lat:isNaN(lat)?null:lat,lng:isNaN(lng)?null:lng,
+    inst:"",coll:"",cat:"",dataset:"",lic:mv("LicenseShortName")||"see source",mlic:"",
+    credit:mv("Artist")||"Wikimedia Commons contributor",rank:"",sci:""
+  };
+}
+function pageGbif(offset,limit){
+  return fetchJson(buildQuery(offset).replace(/limit=\d+/,"limit="+limit),8000).then(function(j){
+    var res=j.results||[];
+    return {count:j.count||0,n:res.length,items:res.map(simplify).filter(Boolean),end:!!j.endOfRecords};
+  });
+}
+function pageCm(offset,limit){
+  var url=CM+"?action=query&format=json&origin=*&generator=search&gsrnamespace=6&gsrlimit="+Math.max(1,limit)+"&gsroffset="+offset+"&gsrsearch="+encodeURIComponent(cmSearch())+"&list=search&srnamespace=6&srlimit=1&srinfo=totalhits&srsearch="+encodeURIComponent(cmSearch())+"&prop=imageinfo&iiprop="+encodeURIComponent("url|extmetadata")+"&iiurlwidth=330&iiextmetadatafilter="+encodeURIComponent("ObjectName|ImageDescription|Artist|LicenseShortName|GPSLatitude|GPSLongitude");
+  return fetchJson(url,15000).then(function(j){
+    var q=j.query||{};var pages=Object.keys(q.pages||{}).map(function(k){return q.pages[k]}).sort(function(a,b){return (a.index||0)-(b.index||0)});
+    var total=(q.searchinfo&&q.searchinfo.totalhits)||pages.length;
+    return {count:total,n:limit?pages.length:0,items:limit?pages.map(simplifyCm).filter(Boolean):[],end:!j.continue};
+  });
+}
+/* Try GBIF first; if it fails, remember that for 5 minutes and use Wikimedia Commons instead. */
+function getPage(offset,limit){
+  if(state.src==="commons"&&Date.now()<state.gbifDownUntil)return pageCm(offset,limit);
+  return pageGbif(offset,limit).then(function(r){state.src="gbif";return r},function(){
+    state.src="commons";state.gbifDownUntil=Date.now()+300000;
+    return pageCm(state.items.length&&offset?state.items.length:0,limit);
+  });
+}
+
 function buildQuery(offset){
   var p=["basisOfRecord=FOSSIL_SPECIMEN","mediaType=StillImage","hasCoordinate=true",
     "license=CC0_1_0","license=CC_BY_4_0","license=CC_BY_NC_4_0","limit="+PAGE,"offset="+offset];
@@ -252,8 +314,8 @@ function buildQuery(offset){
   return API+"occurrence/search?"+p.join("&");
 }
 
-function fetchJson(url){
-  var ctl=new AbortController();var t=setTimeout(function(){ctl.abort()},20000);
+function fetchJson(url,ms){
+  var ctl=new AbortController();var t=setTimeout(function(){ctl.abort()},ms||20000);
   return fetch(url,{signal:ctl.signal}).then(function(r){clearTimeout(t);if(!r.ok)throw new Error("status "+r.status);return r.json()},function(e){clearTimeout(t);throw e});
 }
 
@@ -271,21 +333,19 @@ function load(mode){
   state.busy=true;
   var start=mode==="more"?state.offset:0;
   var go=function(offset){
-    state.offset=offset;
-    return fetchJson(buildQuery(offset)).then(function(j){
+    return getPage(offset,PAGE).then(function(r){
       if(seq!==state.seq)return;
-      state.total=j.count||0;
-      var added=(j.results||[]).map(simplify).filter(Boolean);
-      state.offset=offset+(j.results||[]).length;
-      state.items=state.items.concat(added);
-      render(added,mode==="more");
-      state.endOfResults=!!j.endOfRecords;
+      state.total=r.count;
+      state.offset=offset+r.n;
+      state.items=state.items.concat(r.items);
+      render(r.items,mode==="more");
+      state.endOfResults=r.end;
     });
   };
   var p;
   if(mode==="fresh"){
     /* Count first so a random starting point lands inside the results. */
-    p=fetchJson(buildQuery(0).replace(/limit=\d+/,"limit=0")).then(function(j){
+    p=getPage(0,0).then(function(j){
       var total=j.count||0;var maxStart=Math.max(0,Math.min(total-PAGE,5000));
       return go(maxStart>0?Math.floor(Math.random()*maxStart):0);
     });
@@ -293,7 +353,7 @@ function load(mode){
   return p.catch(function(e){
     if(seq!==state.seq)return;
     state.busy=false;
-    showStatus("The fossil database could not be reached just now. Check your internet connection and try again. If the problem continues, your school network may be blocking api.gbif.org.",true);
+    showStatus("The fossil database could not be reached just now. Check your internet connection and try again. If the problem continues, your school network may be blocking api.gbif.org and commons.wikimedia.org.",true);
     $("count").textContent="";
   }).then(function(){if(seq===state.seq)state.busy=false});
 }
@@ -305,7 +365,7 @@ function render(added,append){
     $("count").textContent="0 specimens";$("more").hidden=true;return}
   showStatus("");
   added.forEach(function(o){g.appendChild(card(o))});
-  $("count").textContent=state.total.toLocaleString()+" specimen"+(state.total===1?"":"s")+" match · showing "+state.items.length;
+  $("count").textContent=state.total.toLocaleString()+" specimen"+(state.total===1?"":"s")+" match · showing "+state.items.length+(state.src==="commons"?" · source: Wikimedia Commons (backup, GBIF is not responding)":"");
   $("more").hidden=state.endOfResults||state.items.length>=state.total||state.offset>=state.total;
   updateMap(added);
 }
@@ -341,9 +401,9 @@ function openDetail(o){
   row("Collection",o.dataset);
   if(o.lat!=null)row("Coordinates",(+o.lat).toFixed(3)+", "+(+o.lng).toFixed(3));
   var L=$("dLinks");L.textContent="";
-  var a1=el("a","p","View specimen record and photo source");a1.href="https://www.gbif.org/occurrence/"+o.key;a1.target="_blank";a1.rel="noopener";L.appendChild(a1);
+  var a1=el("a","p","View specimen record and photo source");a1.href=(o.src==="commons"?o.page:"https://www.gbif.org/occurrence/"+o.key);a1.target="_blank";a1.rel="noopener";L.appendChild(a1);
   var a2=el("a","s","Original photo");a2.href=o.img;a2.target="_blank";a2.rel="noopener noreferrer";L.appendChild(a2);
-  var cr=$("dCredit");cr.textContent="Photo: "+(o.credit||"museum collection")+". Record license: "+(o.lic||"see source")+(o.mlic?"; photo license: "+o.mlic:"")+". Data from GBIF.";
+  var cr=$("dCredit");cr.textContent="Photo: "+(o.credit||"museum collection")+". Record license: "+(o.lic||"see source")+(o.mlic?"; photo license: "+o.mlic:"")+(o.src==="commons"?". Data from Wikimedia Commons.":". Data from GBIF.");
   var d=$("dlg");if(d.showModal)d.showModal();else d.setAttribute("open","");
   d.scrollTop=0;
 }
