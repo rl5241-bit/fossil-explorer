@@ -157,7 +157,7 @@ dialog>div{position:relative}
 
 <footer>
   Specimen records and photos come from museum collections through <a href="https://www.gbif.org" target="_blank" rel="noopener">GBIF</a>, the Global Biodiversity Information Facility. Each fossil's page lists the museum, photographer and license, and links back to the original record. Map tiles &copy; OpenStreetMap contributors.
-<br>If GBIF is not responding, the site switches automatically to Wikimedia Commons fossil photos. Those records have less detail (often no exact location).
+<br>Results combine several databases (GBIF and Wikimedia Commons). If one is not responding, the others still load. Wikimedia Commons photos have less detail (often no exact location).
 </footer>
 </div>
 
@@ -202,7 +202,7 @@ var AUSTIN="POLYGON((-98.9 29.6,-96.7 29.6,-96.7 31.1,-98.9 31.1,-98.9 29.6))";
 var LICS={"http://creativecommons.org/publicdomain/zero/1.0/legalcode":"CC0 (public domain)","http://creativecommons.org/licenses/by/4.0/legalcode":"CC BY 4.0","http://creativecommons.org/licenses/by-nc/4.0/legalcode":"CC BY-NC 4.0"};
 
 var $=function(id){return document.getElementById(id)};
-var state={src:"gbif",gbifDownUntil:0,period:"",offset:0,total:0,items:[],busy:false,seq:0,view:"grid"};
+var state={src:"gbif",gbifDownUntil:0,cool:{gbif:0,commons:0},S:null,period:"",offset:0,total:0,items:[],busy:false,seq:0,view:"grid"};
 var map=null,layer=null;
 
 /* MD5 (needed to build GBIF's image-cache address for a photo) */
@@ -287,7 +287,7 @@ function simplifyCm(p){
   };
 }
 function pageGbif(offset,limit){
-  return fetchJson(buildQuery(offset).replace(/limit=\d+/,"limit="+limit),8000).then(function(j){
+  return fetchJson(buildQuery(offset).replace(/limit=\d+/,"limit="+limit),10000).then(function(j){
     var res=j.results||[];
     return {count:j.count||0,n:res.length,items:res.map(simplify).filter(Boolean),end:!!j.endOfRecords};
   });
@@ -331,50 +331,61 @@ function showStatus(msg,err){
 }
 
 /* mode: "fresh" (random starting point), "first" (start at 0), "more" */
-function load(mode){
-  var seq=++state.seq;
-  if(mode==="more"){}else{
-    state.items=[];$("grid").textContent="";$("more").hidden=true;showStatus("Searching museum collections…");
-    $("count").textContent="Loading fossils…";clearMap();
-  }
-  state.busy=true;
-  var start=mode==="more"?state.offset:0;
-  var go=function(offset){
-    return getPage(offset,PAGE).then(function(r){
+function runSource(n,mode,seq){
+  var S=state.S[n];
+  var fetchPage=(n==="gbif")?pageGbif:pageCm;
+  var first=(mode==="fresh")
+    ?fetchPage(0,0).then(function(r){S.total=r.count;var max=Math.max(0,Math.min(r.count-PAGE,5000));return max>0?Math.floor(Math.random()*max):0})
+    :Promise.resolve(S.off);
+  return first.then(function(off){
+    return fetchPage(off,PAGE).then(function(r){
       if(seq!==state.seq)return;
-      state.total=r.count;
-      state.offset=offset+r.n;
+      S.total=r.count;S.off=off+r.n;S.end=!!r.end||r.n===0;S.ok=true;
       state.items=state.items.concat(r.items);
-      render(r.items,mode==="more");
-      state.endOfResults=r.end;
+      renderAdd(r.items);
     });
-  };
-  var p;
-  if(mode==="fresh"){
-    /* Count first so a random starting point lands inside the results. */
-    p=getPage(0,0).then(function(j){
-      var total=j.count||0;var maxStart=Math.max(0,Math.min(total-PAGE,5000));
-      return go(maxStart>0?Math.floor(Math.random()*maxStart):0);
-    });
-  }else p=go(start);
-  return p.catch(function(e){
+  }).catch(function(){
     if(seq!==state.seq)return;
-    state.busy=false;
-    showStatus("The fossil database could not be reached just now. Check your internet connection and try again. If the problem continues, your school network may be blocking api.gbif.org and commons.wikimedia.org.",true);
-    $("count").textContent="";
-  }).then(function(){if(seq===state.seq)state.busy=false});
+    S.ok=false;state.cool[n]=Date.now()+300000;
+  });
 }
-
-function render(added,append){
+var SRC_LABEL={gbif:"GBIF",commons:"Wikimedia Commons"};
+function summarize(){
+  var S=state.S,tot=0,used=[];
+  ["gbif","commons"].forEach(function(n){if(S[n].ok){tot+=S[n].total;used.push(SRC_LABEL[n])}});
+  state.total=tot;
+  var note=(S.gbif.ok===false)?" · GBIF not responding":"";
+  $("count").textContent=tot.toLocaleString()+" specimen"+(tot===1?"":"s")+" match · showing "+state.items.length+" · sources: "+used.join(" + ")+note;
+}
+function renderAdd(added){
   var g=$("grid");
-  if(!append)g.textContent="";
-  if(!state.items.length){showStatus("No fossils with photos matched. Try a different time, organism or place, or clear the search box.");
-    $("count").textContent="0 specimens";$("more").hidden=true;return}
   showStatus("");
   added.forEach(function(o){g.appendChild(card(o))});
-  $("count").textContent=state.total.toLocaleString()+" specimen"+(state.total===1?"":"s")+" match · showing "+state.items.length+(state.src==="commons"?" · source: Wikimedia Commons (backup, GBIF is not responding)":"");
-  $("more").hidden=state.endOfResults||state.items.length>=state.total||state.offset>=state.total;
   updateMap(added);
+  summarize();
+}
+/* Ask every database at the same time; show results from whichever ones answer. */
+function load(mode){
+  var seq=++state.seq;
+  if(mode!=="more"){
+    state.items=[];$("grid").textContent="";$("more").hidden=true;showStatus("Searching museum collections…");
+    $("count").textContent="Loading fossils…";clearMap();
+    state.S={gbif:{off:0,total:0,end:false,ok:null},commons:{off:0,total:0,end:false,ok:null}};
+  }
+  state.busy=true;
+  var now=Date.now(),all=["gbif","commons"];
+  var names=all.filter(function(n){return !state.S[n].end&&!(state.cool[n]>now)});
+  if(!names.length)names=all.filter(function(n){return !state.S[n].end});
+  return Promise.all(names.map(function(n){return runSource(n,mode,seq)})).then(function(){
+    if(seq!==state.seq)return;
+    state.busy=false;
+    var S=state.S,any=all.some(function(n){return S[n].ok});
+    if(!state.items.length){
+      if(!any){showStatus("The fossil databases could not be reached just now. Check your internet connection and try again. If the problem continues, your school network may be blocking api.gbif.org or commons.wikimedia.org.",true);$("count").textContent=""}
+      else{showStatus("No fossils with photos matched. Try a different time, organism or place, or clear the search box.");$("count").textContent="0 specimens"}
+    }else summarize();
+    $("more").hidden=!all.some(function(n){return S[n].ok&&!S[n].end});
+  });
 }
 
 function card(o){
