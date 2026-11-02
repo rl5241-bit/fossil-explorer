@@ -1,0 +1,425 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fossil Explorer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Source+Sans+3:ital,wght@0,400;0,600;1,400&display=swap">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+/* Layout: sticky filter strip over a photo grid; deep-time chips run oldest to youngest; detail opens in a dialog. */
+:root{
+  --bg:#ecefec; --panel:#ffffff; --ink:#18282b; --muted:#566669; --line:#cdd6d3;
+  --accent:#a8461f; --accent-ink:#ffffff; --photo:#d9dfdc; --focus:#1d6f8a;
+  --display:"Bricolage Grotesque","Trebuchet MS",system-ui,sans-serif;
+  --body:"Source Sans 3",system-ui,-apple-system,"Segoe UI",sans-serif;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#12201f; --panel:#1b2c2b; --ink:#e7eeec; --muted:#9fb1ae; --line:#2f4442;
+  --accent:#e0804f; --accent-ink:#1a1209; --photo:#0e1918; --focus:#7cc7de; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#12201f; --panel:#1b2c2b; --ink:#e7eeec; --muted:#9fb1ae; --line:#2f4442;
+  --accent:#e0804f; --accent-ink:#1a1209; --photo:#0e1918; --focus:#7cc7de; color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--body);font-size:16px;line-height:1.5}
+.wrap{max-width:1180px;margin:0 auto;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+header{padding-block:22px 10px}
+h1{font:700 clamp(1.7rem,4vw,2.5rem)/1.1 var(--display);margin:0;letter-spacing:-.01em}
+.sub{margin:6px 0 0;color:var(--muted);max-width:62ch}
+.controls{display:grid;gap:12px;padding-block:12px 14px}
+.row{display:flex;flex-wrap:wrap;gap:10px;align-items:end}
+.field{display:flex;flex-direction:column;gap:3px;min-width:0}
+.field label{font-size:.75rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+input[type=search],select{font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:8px 10px;min-height:40px;min-width:0}
+.field.grow{flex:1 1 220px}
+button{font:inherit;cursor:pointer}
+.btn{background:var(--accent);color:var(--accent-ink);border:0;border-radius:6px;padding:9px 16px;font-weight:600;min-height:40px}
+.btn.alt{background:transparent;color:var(--ink);border:1px solid var(--line)}
+:focus-visible{outline:3px solid var(--focus);outline-offset:2px}
+.time{display:flex;gap:6px;overflow-x:auto;padding-bottom:6px;scroll-snap-type:x proximity}
+.chip{flex:0 0 auto;scroll-snap-align:start;border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:6px;padding:6px 10px;text-align:left;min-width:92px;border-top:5px solid var(--c,var(--line))}
+.chip b{display:block;font:600 .9rem var(--display)}
+.chip span{font-size:.72rem;color:var(--muted)}
+.chip[aria-pressed=true]{background:var(--ink);color:var(--bg)}
+.chip[aria-pressed=true] span{color:var(--bg);opacity:.8}
+.timecap{font-size:.78rem;color:var(--muted);margin:0 0 4px}
+.bar{display:flex;flex-wrap:wrap;justify-content:space-between;gap:10px;align-items:center;padding-block:6px 10px}
+.count{font-weight:600}
+.tabs{display:flex;gap:0}
+.tabs button{border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:7px 16px;min-height:38px}
+.tabs button:first-child{border-radius:6px 0 0 6px}.tabs button:last-child{border-radius:0 6px 6px 0;border-left:0}
+.tabs button[aria-pressed=true]{background:var(--ink);color:var(--bg)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(176px,1fr));gap:14px;padding-bottom:20px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:0;text-align:left;color:var(--ink);overflow:hidden;display:flex;flex-direction:column;min-width:0}
+.card:hover{border-color:var(--accent)}
+.ph{aspect-ratio:4/3;background:var(--photo);display:block;width:100%;object-fit:cover}
+.cb{padding:9px 11px 11px;display:flex;flex-direction:column;gap:4px;min-width:0}
+.nm{font:600 1rem/1.2 var(--display);overflow-wrap:anywhere}
+.nm i{font-style:italic}
+.meta{font-size:.82rem;color:var(--muted);overflow-wrap:anywhere}
+.pill{align-self:flex-start;font-size:.72rem;font-weight:600;color:#1a1a1a;background:var(--c,#ccc);border-radius:20px;padding:1px 9px}
+.status{padding:30px 0;text-align:center;color:var(--muted)}
+.status.err{color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:20px;text-align:left}
+.more{display:flex;justify-content:center;padding-bottom:36px}
+#map{height:min(70vh,560px);min-height:340px;border:1px solid var(--line);border-radius:8px;margin-bottom:24px;background:var(--photo)}
+footer{padding-block:6px 40px;color:var(--muted);font-size:.85rem}
+footer a{color:inherit}
+dialog{border:0;padding:0;border-radius:10px;background:var(--panel);color:var(--ink);width:min(880px,calc(100vw - 20px));max-height:calc(100vh - 20px);overflow:auto}
+dialog::backdrop{background:rgba(8,16,16,.65)}
+.dh{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:0}
+@media (max-width:700px){.dh{grid-template-columns:minmax(0,1fr)}}
+.big{background:var(--photo);display:flex;align-items:center;justify-content:center;min-height:240px}
+.big img{max-width:100%;max-height:70vh;display:block}
+.info{padding:18px 20px;display:flex;flex-direction:column;gap:10px;min-width:0}
+.info h2{font:700 1.45rem/1.15 var(--display);margin:0;overflow-wrap:anywhere}
+dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:5px 12px;font-size:.92rem}
+dt{color:var(--muted)}dd{margin:0;overflow-wrap:anywhere}
+.think{border-top:1px solid var(--line);padding-top:10px;font-size:.92rem}
+.think b{font-family:var(--display)}
+.think ul{margin:4px 0 0;padding-left:20px}
+.credit{font-size:.82rem;color:var(--muted)}
+.credit a{color:var(--accent)}
+.x{position:absolute;top:8px;right:8px;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:6px;width:40px;height:40px;font-size:1.3rem;line-height:1}
+dialog>div{position:relative}
+.links{display:flex;flex-wrap:wrap;gap:8px}
+.links a{display:inline-block;text-decoration:none;border-radius:6px;padding:8px 12px;font-weight:600;font-size:.9rem}
+.links a.p{background:var(--accent);color:var(--accent-ink)}
+.links a.s{border:1px solid var(--line);color:var(--ink)}
+@media (prefers-reduced-motion:no-preference){.card{transition:border-color .15s}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>Fossil Explorer</h1>
+  <p class="sub">Browse photos of real fossil specimens held by museums around the world. Pick a time in Earth's history, an animal group, or a place, then click a fossil to learn where and when it was found.</p>
+</header>
+
+<form class="controls" id="form" role="search">
+  <div>
+    <p class="timecap">Geologic time (millions of years ago, Ma)</p>
+    <div class="time" id="time" role="group" aria-label="Geologic period"></div>
+  </div>
+  <div class="row">
+    <div class="field grow"><label for="q">Search</label><input id="q" type="search" placeholder="e.g. trilobite, shark tooth, mammoth"></div>
+    <div class="field"><label for="grp">Kind of organism</label>
+      <select id="grp">
+        <option value="">Anything</option>
+        <option value="9273948">Trilobites</option>
+        <option value="136">Ammonites and other cephalopods</option>
+        <option value="137">Clams and relatives</option>
+        <option value="225">Snails</option>
+        <option value="110">Brachiopods</option>
+        <option value="206">Corals</option>
+        <option value="215">Sea lilies (crinoids)</option>
+        <option value="221">Sea urchins</option>
+        <option value="50">Echinoderms (all)</option>
+        <option value="121">Sharks and rays</option>
+        <option value="359">Mammals</option>
+        <option value="11418114">Turtles</option>
+        <option value="212">Birds</option>
+        <option value="216">Insects</option>
+        <option value="6">Plants</option>
+        <option value="105">Sponges</option>
+        <option value="53">Moss animals (bryozoans)</option>
+      </select></div>
+    <div class="field"><label for="reg">Where found</label>
+      <select id="reg">
+        <option value="">Worldwide</option>
+        <option value="tx">Texas</option>
+        <option value="atx">Near Austin, Texas</option>
+      </select></div>
+    <button class="btn" type="submit">Show fossils</button>
+    <button class="btn alt" type="button" id="surprise">Surprise me</button>
+  </div>
+</form>
+
+<div class="bar">
+  <div class="count" id="count" aria-live="polite">Loading fossils…</div>
+  <div class="tabs" role="group" aria-label="View">
+    <button type="button" id="vGrid" aria-pressed="true">Photos</button>
+    <button type="button" id="vMap" aria-pressed="false">Map</button>
+  </div>
+</div>
+
+<main>
+  <div id="gridView">
+    <div class="grid" id="grid"></div>
+    <div class="status" id="status" hidden></div>
+    <div class="more"><button class="btn alt" id="more" type="button" hidden>Show more fossils</button></div>
+  </div>
+  <div id="mapView" hidden>
+    <div id="map" role="region" aria-label="Map of where the fossils shown were found"></div>
+  </div>
+</main>
+
+<footer>
+  Specimen records and photos come from museum collections through <a href="https://www.gbif.org" target="_blank" rel="noopener">GBIF</a>, the Global Biodiversity Information Facility. Each fossil's page lists the museum, photographer and license, and links back to the original record. Map tiles &copy; OpenStreetMap contributors.
+</footer>
+</div>
+
+<dialog id="dlg" aria-labelledby="dName">
+  <div>
+    <button class="x" id="dClose" aria-label="Close">&times;</button>
+    <div class="dh">
+      <div class="big"><img id="dImg" alt=""></div>
+      <div class="info">
+        <h2 id="dName"></h2>
+        <span class="pill" id="dPill"></span>
+        <dl id="dDl"></dl>
+        <div class="links" id="dLinks"></div>
+        <div class="think">
+          <b>Think like a paleontologist</b>
+          <ul>
+            <li>What shapes, patterns or textures do you see? Is anything missing or broken?</li>
+            <li>Which living animals does it remind you of?</li>
+            <li>What was this place like when the animal lived? Warm or cold, deep ocean or dry land?</li>
+          </ul>
+        </div>
+        <div class="credit" id="dCredit"></div>
+      </div>
+    </div>
+  </div>
+</dialog>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+(function(){
+"use strict";
+var API="https://api.gbif.org/v1/";
+var PAGE=24;
+var PERIODS=[
+ ["Cambrian","539–485",539,485,"#8fb58a"],["Ordovician","485–444",485,444,"#5fb3a1"],["Silurian","444–419",444,419,"#a9d3c0"],
+ ["Devonian","419–359",419,359,"#d9a35f"],["Carboniferous","359–299",359,299,"#8aa6a3"],["Permian","299–252",299,252,"#e07b66"],
+ ["Triassic","252–201",252,201,"#b58bc0"],["Jurassic","201–145",201,145,"#6fb4d9"],["Cretaceous","145–66",145,66,"#9ccf6e"],
+ ["Paleogene","66–23",66,23,"#f0a46b"],["Neogene","23–2.6",23,2.6,"#f2d56b"],["Quaternary","2.6–0",2.6,0,"#f5e9a8"]
+];
+var PINFO={};PERIODS.forEach(function(p){PINFO[p[0]]={ma:p[1],from:p[2],to:p[3],c:p[4]}});
+var AUSTIN="POLYGON((-98.9 29.6,-96.7 29.6,-96.7 31.1,-98.9 31.1,-98.9 29.6))";
+var LICS={"http://creativecommons.org/publicdomain/zero/1.0/legalcode":"CC0 (public domain)","http://creativecommons.org/licenses/by/4.0/legalcode":"CC BY 4.0","http://creativecommons.org/licenses/by-nc/4.0/legalcode":"CC BY-NC 4.0"};
+
+var $=function(id){return document.getElementById(id)};
+var state={period:"",offset:0,total:0,items:[],busy:false,seq:0,view:"grid"};
+var map=null,layer=null;
+
+/* MD5 (needed to build GBIF's image-cache address for a photo) */
+function md5(s){function L(k,d){return(k<<d)|(k>>>(32-d))}function K(G,k){var I,d,F,H,x;F=(G&2147483648);H=(k&2147483648);I=(G&1073741824);d=(k&1073741824);x=(G&1073741823)+(k&1073741823);if(I&d)return(x^2147483648^F^H);if(I|d){if(x&1073741824)return(x^3221225472^F^H);else return(x^1073741824^F^H)}else return(x^F^H)}function r(d,F,k){return(d&F)|((~d)&k)}function q(d,F,k){return(d&k)|(F&(~k))}function p(d,F,k){return(d^F^k)}function n(d,F,k){return(F^(d|(~k)))}function u(G,F,aa,Z,k,H,I){G=K(G,K(K(r(F,aa,Z),k),I));return K(L(G,H),F)}function f(G,F,aa,Z,k,H,I){G=K(G,K(K(q(F,aa,Z),k),I));return K(L(G,H),F)}function D(G,F,aa,Z,k,H,I){G=K(G,K(K(p(F,aa,Z),k),I));return K(L(G,H),F)}function t(G,F,aa,Z,k,H,I){G=K(G,K(K(n(F,aa,Z),k),I));return K(L(G,H),F)}function e(G){var Z;var F=G.length;var x=F+8;var k=(x-(x%64))/64;var I=(k+1)*16;var aa=Array(I-1);var d=0;var H=0;while(H<F){Z=(H-(H%4))/4;d=(H%4)*8;aa[Z]=(aa[Z]|(G.charCodeAt(H)<<d));H++}Z=(H-(H%4))/4;d=(H%4)*8;aa[Z]=aa[Z]|(128<<d);aa[I-2]=F<<3;aa[I-1]=F>>>29;return aa}function B(x){var k="",F="",G,d;for(d=0;d<=3;d++){G=(x>>>(d*8))&255;F="0"+G.toString(16);k=k+F.substr(F.length-2,2)}return k}var C=Array();var P,h,E,v,g,Y,X,W,V;s=unescape(encodeURIComponent(s));C=e(s);Y=1732584193;X=4023233417;W=2562383102;V=271733878;for(P=0;P<C.length;P+=16){h=Y;E=X;v=W;g=V;Y=u(Y,X,W,V,C[P+0],7,3614090360);V=u(V,Y,X,W,C[P+1],12,3905402710);W=u(W,V,Y,X,C[P+2],17,606105819);X=u(X,W,V,Y,C[P+3],22,3250441966);Y=u(Y,X,W,V,C[P+4],7,4118548399);V=u(V,Y,X,W,C[P+5],12,1200080426);W=u(W,V,Y,X,C[P+6],17,2821735955);X=u(X,W,V,Y,C[P+7],22,4249261313);Y=u(Y,X,W,V,C[P+8],7,1770035416);V=u(V,Y,X,W,C[P+9],12,2336552879);W=u(W,V,Y,X,C[P+10],17,4294925233);X=u(X,W,V,Y,C[P+11],22,2304563134);Y=u(Y,X,W,V,C[P+12],7,1804603682);V=u(V,Y,X,W,C[P+13],12,4254626195);W=u(W,V,Y,X,C[P+14],17,2792965006);X=u(X,W,V,Y,C[P+15],22,1236535329);Y=f(Y,X,W,V,C[P+1],5,4129170786);V=f(V,Y,X,W,C[P+6],9,3225465664);W=f(W,V,Y,X,C[P+11],14,643717713);X=f(X,W,V,Y,C[P+0],20,3921069994);Y=f(Y,X,W,V,C[P+5],5,3593408605);V=f(V,Y,X,W,C[P+10],9,38016083);W=f(W,V,Y,X,C[P+15],14,3634488961);X=f(X,W,V,Y,C[P+4],20,3889429448);Y=f(Y,X,W,V,C[P+9],5,568446438);V=f(V,Y,X,W,C[P+14],9,3275163606);W=f(W,V,Y,X,C[P+3],14,4107603335);X=f(X,W,V,Y,C[P+8],20,1163531501);Y=f(Y,X,W,V,C[P+13],5,2850285829);V=f(V,Y,X,W,C[P+2],9,4243563512);W=f(W,V,Y,X,C[P+7],14,1735328473);X=f(X,W,V,Y,C[P+12],20,2368359562);Y=D(Y,X,W,V,C[P+5],4,4294588738);V=D(V,Y,X,W,C[P+8],11,2272392833);W=D(W,V,Y,X,C[P+11],16,1839030562);X=D(X,W,V,Y,C[P+14],23,4259657740);Y=D(Y,X,W,V,C[P+1],4,2763975236);V=D(V,Y,X,W,C[P+4],11,1272893353);W=D(W,V,Y,X,C[P+7],16,4139469664);X=D(X,W,V,Y,C[P+10],23,3200236656);Y=D(Y,X,W,V,C[P+13],4,681279174);V=D(V,Y,X,W,C[P+0],11,3936430074);W=D(W,V,Y,X,C[P+3],16,3572445317);X=D(X,W,V,Y,C[P+6],23,76029189);Y=D(Y,X,W,V,C[P+9],4,3654602809);V=D(V,Y,X,W,C[P+12],11,3873151461);W=D(W,V,Y,X,C[P+15],16,530742520);X=D(X,W,V,Y,C[P+2],23,3299628645);Y=t(Y,X,W,V,C[P+0],6,4096336452);V=t(V,Y,X,W,C[P+7],10,1126891415);W=t(W,V,Y,X,C[P+14],15,2878612391);X=t(X,W,V,Y,C[P+5],21,4237533241);Y=t(Y,X,W,V,C[P+12],6,1700485571);V=t(V,Y,X,W,C[P+3],10,2399980690);W=t(W,V,Y,X,C[P+10],15,4293915773);X=t(X,W,V,Y,C[P+1],21,2240044497);Y=t(Y,X,W,V,C[P+8],6,1873313359);V=t(V,Y,X,W,C[P+15],10,4264355552);W=t(W,V,Y,X,C[P+6],15,2734768916);X=t(X,W,V,Y,C[P+13],21,1309151649);Y=t(Y,X,W,V,C[P+4],6,4149444226);V=t(V,Y,X,W,C[P+11],10,3174756917);W=t(W,V,Y,X,C[P+2],15,718787259);X=t(X,W,V,Y,C[P+9],21,3951481745);Y=K(Y,h);X=K(X,E);W=K(W,v);V=K(V,g)}return(B(Y)+B(X)+B(W)+B(V)).toLowerCase()}
+
+function el(tag,cls,text){var e=document.createElement(tag);if(cls)e.className=cls;if(text!=null)e.textContent=text;return e}
+
+function imgUrl(o,size){
+  var h=md5(o.img);
+  return API+"image/cache/"+(size?size+"/":"")+"occurrence/"+o.key+"/media/"+h;
+}
+function setImg(img,o,size){
+  img.onerror=function(){img.onerror=null;img.src=imgUrl(o,"")};
+  img.src=imgUrl(o,size);
+}
+
+function simplify(r){
+  var m=null;(r.media||[]).forEach(function(x){if(!m&&x.identifier&&(!x.type||x.type==="StillImage"))m=x});
+  if(!m)return null;
+  var rank=r.taxonRank;
+  var nm=r.species||r.genus||r.family||r.scientificName||"Unidentified fossil";
+  var lic=LICS[r.license]||r.license||"";
+  var mlic=m.license?(m.license.replace(/^https?:\/\/creativecommons.org\/(licenses|publicdomain)\//,"CC ").replace(/\/(legalcode)?$/,"").replace(/\//g," ")):"";
+  return {
+    key:r.key,img:m.identifier,name:nm,italic:!!(r.species||r.genus),
+    group:[r.class||r.phylum,r.order].filter(Boolean).filter(function(v,i,a){return a.indexOf(v)===i}).join(" · "),
+    period:r.earliestPeriodOrLowestSystem||"",epoch:r.earliestEpochOrLowestSeries||"",era:r.earliestEraOrLowestErathem||"",
+    formation:r.formation||"",
+    place:[r.locality,r.county,r.stateProvince,r.country].filter(Boolean).filter(function(v,i,a){return a.indexOf(v)===i}).join(", "),
+    short:[r.stateProvince,r.country].filter(Boolean).join(", "),
+    lat:r.decimalLatitude,lng:r.decimalLongitude,
+    inst:r.institutionCode||"",coll:r.collectionCode||"",cat:r.catalogNumber||"",
+    dataset:r.datasetName||"",lic:lic,mlic:mlic,
+    credit:m.creator||m.rightsHolder||r.rightsHolder||"",
+    rank:rank,sci:r.scientificName||""
+  };
+}
+
+function buildQuery(offset){
+  var p=["basisOfRecord=FOSSIL_SPECIMEN","mediaType=StillImage","hasCoordinate=true",
+    "license=CC0_1_0","license=CC_BY_4_0","license=CC_BY_NC_4_0","limit="+PAGE,"offset="+offset];
+  if(state.period)p.push("earliestPeriodOrLowestSystem="+encodeURIComponent(state.period));
+  var g=$("grp").value;if(g)p.push("taxonKey="+g);
+  var q=$("q").value.trim();if(q)p.push("q="+encodeURIComponent(q));
+  var rg=$("reg").value;
+  if(rg==="tx"){p.push("stateProvince=Texas");p.push("country=US")}
+  if(rg==="atx")p.push("geometry="+encodeURIComponent(AUSTIN));
+  return API+"occurrence/search?"+p.join("&");
+}
+
+function fetchJson(url){
+  var ctl=new AbortController();var t=setTimeout(function(){ctl.abort()},20000);
+  return fetch(url,{signal:ctl.signal}).then(function(r){clearTimeout(t);if(!r.ok)throw new Error("status "+r.status);return r.json()},function(e){clearTimeout(t);throw e});
+}
+
+function showStatus(msg,err){
+  var s=$("status");s.hidden=!msg;s.textContent=msg||"";s.className="status"+(err?" err":"");
+}
+
+/* mode: "fresh" (random starting point), "first" (start at 0), "more" */
+function load(mode){
+  var seq=++state.seq;
+  if(mode==="more"){}else{
+    state.items=[];$("grid").textContent="";$("more").hidden=true;showStatus("Searching museum collections…");
+    $("count").textContent="Loading fossils…";clearMap();
+  }
+  state.busy=true;
+  var start=mode==="more"?state.offset:0;
+  var go=function(offset){
+    state.offset=offset;
+    return fetchJson(buildQuery(offset)).then(function(j){
+      if(seq!==state.seq)return;
+      state.total=j.count||0;
+      var added=(j.results||[]).map(simplify).filter(Boolean);
+      state.offset=offset+(j.results||[]).length;
+      state.items=state.items.concat(added);
+      render(added,mode==="more");
+      state.endOfResults=!!j.endOfRecords;
+    });
+  };
+  var p;
+  if(mode==="fresh"){
+    /* Count first so a random starting point lands inside the results. */
+    p=fetchJson(buildQuery(0).replace(/limit=\d+/,"limit=0")).then(function(j){
+      var total=j.count||0;var maxStart=Math.max(0,Math.min(total-PAGE,5000));
+      return go(maxStart>0?Math.floor(Math.random()*maxStart):0);
+    });
+  }else p=go(start);
+  return p.catch(function(e){
+    if(seq!==state.seq)return;
+    state.busy=false;
+    showStatus("The fossil database could not be reached just now. Check your internet connection and try again. If the problem continues, your school network may be blocking api.gbif.org.",true);
+    $("count").textContent="";
+  }).then(function(){if(seq===state.seq)state.busy=false});
+}
+
+function render(added,append){
+  var g=$("grid");
+  if(!append)g.textContent="";
+  if(!state.items.length){showStatus("No fossils with photos matched. Try a different time, organism or place, or clear the search box.");
+    $("count").textContent="0 specimens";$("more").hidden=true;return}
+  showStatus("");
+  added.forEach(function(o){g.appendChild(card(o))});
+  $("count").textContent=state.total.toLocaleString()+" specimen"+(state.total===1?"":"s")+" match · showing "+state.items.length;
+  $("more").hidden=state.endOfResults||state.items.length>=state.total||state.offset>=state.total;
+  updateMap(added);
+}
+
+function card(o){
+  var b=el("button","card");b.type="button";
+  b.setAttribute("aria-label","Open details for "+o.name);
+  var im=el("img","ph");im.alt="Photo of fossil specimen: "+o.name;im.loading="lazy";im.width=300;im.height=225;setImg(im,o,"300x");
+  b.appendChild(im);
+  var c=el("div","cb");
+  var n=el("div","nm");var s=el(o.italic?"i":"span",null,o.name);n.appendChild(s);c.appendChild(n);
+  if(o.period){var pl=el("span","pill",o.period);pl.style.setProperty("--c",(PINFO[o.period]||{}).c||"#ccc");c.appendChild(pl)}
+  if(o.short)c.appendChild(el("div","meta",o.short));
+  b.appendChild(c);
+  b.addEventListener("click",function(){openDetail(o)});
+  return b;
+}
+
+function openDetail(o){
+  $("dName").textContent="";var h=el(o.italic?"i":"span",null,o.name);$("dName").appendChild(h);
+  var pill=$("dPill");pill.textContent="";pill.hidden=!o.period;
+  var pi=PINFO[o.period];
+  if(o.period){pill.textContent=o.period+(pi?" · "+pi.ma+" million years ago":"");pill.style.setProperty("--c",pi?pi.c:"#ccc")}
+  var img=$("dImg");img.alt="Photo of fossil specimen: "+o.name;setImg(img,o,"800x");
+  var dl=$("dDl");dl.textContent="";
+  function row(k,v){if(!v)return;dl.appendChild(el("dt",null,k));dl.appendChild(el("dd",null,v))}
+  row("Scientific name",o.sci);
+  row("Group",o.group);
+  row("Age",[o.epoch,o.period].filter(Boolean).join(", ")+(pi?" (about "+pi.ma+" Ma)":""));
+  row("Found",o.place);
+  row("Rock layer",o.formation);
+  row("Museum",[o.inst,o.coll].filter(Boolean).join(" ")+(o.cat?" · catalog no. "+o.cat:""));
+  row("Collection",o.dataset);
+  if(o.lat!=null)row("Coordinates",(+o.lat).toFixed(3)+", "+(+o.lng).toFixed(3));
+  var L=$("dLinks");L.textContent="";
+  var a1=el("a","p","View specimen record and photo source");a1.href="https://www.gbif.org/occurrence/"+o.key;a1.target="_blank";a1.rel="noopener";L.appendChild(a1);
+  var a2=el("a","s","Original photo");a2.href=o.img;a2.target="_blank";a2.rel="noopener noreferrer";L.appendChild(a2);
+  var cr=$("dCredit");cr.textContent="Photo: "+(o.credit||"museum collection")+". Record license: "+(o.lic||"see source")+(o.mlic?"; photo license: "+o.mlic:"")+". Data from GBIF.";
+  var d=$("dlg");if(d.showModal)d.showModal();else d.setAttribute("open","");
+  d.scrollTop=0;
+}
+
+/* Map */
+function ensureMap(){
+  if(map||!window.L)return !!map;
+  map=L.map("map",{worldCopyJump:true}).setView([20,0],2);
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:12,attribution:"&copy; OpenStreetMap contributors"}).addTo(map);
+  layer=L.layerGroup().addTo(map);
+  return true;
+}
+function clearMap(){if(layer)layer.clearLayers()}
+function updateMap(items){
+  if(!ensureMap())return;
+  items.forEach(function(o){
+    if(o.lat==null||o.lng==null)return;
+    var c=(PINFO[o.period]||{}).c||"#a8461f";
+    var m=L.circleMarker([o.lat,o.lng],{radius:8,color:"#18282b",weight:1.5,fillColor:c,fillOpacity:.95});
+    m.bindTooltip(o.name+(o.period?" · "+o.period:""));
+    m.on("click",function(){openDetail(o)});
+    m.addTo(layer);
+  });
+}
+function fitMap(){
+  if(!map)return;map.invalidateSize();
+  var pts=state.items.filter(function(o){return o.lat!=null}).map(function(o){return [o.lat,o.lng]});
+  if(pts.length)map.fitBounds(pts,{padding:[30,30],maxZoom:7});
+}
+function setView(v){
+  state.view=v;
+  $("gridView").hidden=v!=="grid";$("mapView").hidden=v!=="map";
+  $("vGrid").setAttribute("aria-pressed",v==="grid");$("vMap").setAttribute("aria-pressed",v==="map");
+  if(v==="map"){
+    if(!ensureMap()){$("mapView").textContent="";var s=el("div","status err","The map could not load. Check your internet connection or use the Photos view.");$("mapView").appendChild(s);return}
+    if(layer.getLayers().length===0)updateMap(state.items);
+    setTimeout(fitMap,50);
+  }
+}
+
+/* Time chips */
+function buildChips(){
+  var t=$("time");
+  var all=el("button","chip");all.type="button";all.setAttribute("aria-pressed","true");
+  all.appendChild(el("b",null,"All time"));all.appendChild(el("span",null,"539–0 Ma"));
+  all.dataset.p="";all.style.setProperty("--c","var(--ink)");t.appendChild(all);
+  PERIODS.forEach(function(p){
+    var b=el("button","chip");b.type="button";b.setAttribute("aria-pressed","false");b.dataset.p=p[0];
+    b.style.setProperty("--c",p[4]);b.appendChild(el("b",null,p[0]));b.appendChild(el("span",null,p[1]+" Ma"));
+    t.appendChild(b);
+  });
+  t.addEventListener("click",function(e){
+    var b=e.target.closest(".chip");if(!b)return;
+    state.period=b.dataset.p;
+    Array.prototype.forEach.call(t.children,function(x){x.setAttribute("aria-pressed",x===b)});
+    load("fresh");
+  });
+}
+
+$("form").addEventListener("submit",function(e){e.preventDefault();load("fresh")});
+$("grp").addEventListener("change",function(){load("fresh")});
+$("reg").addEventListener("change",function(){load("fresh")});
+$("surprise").addEventListener("click",function(){
+  var opts=$("grp").options;$("grp").selectedIndex=0;$("q").value="";$("reg").value="";
+  var chips=$("time").children;var pick=chips[1+Math.floor(Math.random()*PERIODS.length)];
+  pick.click();
+});
+$("more").addEventListener("click",function(){if(!state.busy)load("more")});
+$("vGrid").addEventListener("click",function(){setView("grid")});
+$("vMap").addEventListener("click",function(){setView("map")});
+$("dClose").addEventListener("click",function(){$("dlg").close()});
+$("dlg").addEventListener("click",function(e){if(e.target===$("dlg"))$("dlg").close()});
+
+buildChips();
+load("fresh");
+})();
+</script>
+</body>
+</html>
