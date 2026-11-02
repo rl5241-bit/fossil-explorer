@@ -255,12 +255,19 @@ function cmSearch(){
   var rg=$("reg").value;
   if(rg==="tx")p.push("Texas");
   if(rg==="atx")p.push("Austin Texas");
-  return p.join(" ")+" filetype:bitmap";
+  return "deepcat:Fossils "+p.join(" ")+" filetype:bitmap -Naturalis -geograph";
 }
 function cmPeriod(txt){
   if(state.period)return state.period;
   for(var i=0;i<PERIODS.length;i++){if(new RegExp("\\b"+PERIODS[i][0]+"\\b","i").test(txt))return PERIODS[i][0]}
   return "";
+}
+function isFossilCm(p){
+  var title=(p.title||"").replace(/^File:/,"");
+  var cats=(p.categories||[]).map(function(c){return c.title.replace(/^Category:/,"")}).join(" | ");
+  if(/\b(beds?|national|monument|park|festival|museum|rim|lake|geograph|artwork|sculpture|poster|logo|map|reconstruction|restoration|illustration|drawing|diagram|forest|site|quarry|cliffs?|beach|trail|wildlife|landscape|sign|statue|mural|cartoon|stamp|fuel|day)\b/i.test(title))return false;
+  if(/(fossil|dinosaur) (beds|sites|localities|parks|festivals)|national (monuments?|parks?)|artwork|sculptures|models|replicas|reconstructions|paleoart|palaeoart|stamps|geoparks?/i.test(cats))return false;
+  return /fossil|ammonit|trilobit|brachiopod|crinoid|belemnit|graptolit|dinosaur|palaeo|paleo|petrified|coprolite|amber|stromatolit|extinct|mammoth|mastodon|saurus|echinoid|bivalv|gastropod|nautiloid|coral|shark|tooth/i.test(cats+" "+title);
 }
 function simplifyCm(p){
   var ii=(p.imageinfo||[])[0];if(!ii||!ii.thumburl)return null;
@@ -286,11 +293,11 @@ function pageGbif(offset,limit){
   });
 }
 function pageCm(offset,limit){
-  var url=CM+"?action=query&format=json&origin=*&generator=search&gsrnamespace=6&gsrlimit="+Math.max(1,limit)+"&gsroffset="+offset+"&gsrsearch="+encodeURIComponent(cmSearch())+"&list=search&srnamespace=6&srlimit=1&srinfo=totalhits&srsearch="+encodeURIComponent(cmSearch())+"&prop=imageinfo&iiprop="+encodeURIComponent("url|extmetadata")+"&iiurlwidth=330&iiextmetadatafilter="+encodeURIComponent("ObjectName|ImageDescription|Artist|LicenseShortName|GPSLatitude|GPSLongitude");
+  var url=CM+"?action=query&format=json&origin=*&generator=search&gsrnamespace=6&gsrlimit="+(limit?50:1)+"&gsroffset="+offset+"&gsrsearch="+encodeURIComponent(cmSearch())+"&list=search&srnamespace=6&srlimit=1&srinfo=totalhits&srsearch="+encodeURIComponent(cmSearch())+"&prop="+encodeURIComponent("imageinfo|categories")+"&cllimit=max&iiprop="+encodeURIComponent("url|extmetadata")+"&iiurlwidth=330&iiextmetadatafilter="+encodeURIComponent("ObjectName|ImageDescription|Artist|LicenseShortName|GPSLatitude|GPSLongitude");
   return fetchJson(url,15000).then(function(j){
     var q=j.query||{};var pages=Object.keys(q.pages||{}).map(function(k){return q.pages[k]}).sort(function(a,b){return (a.index||0)-(b.index||0)});
     var total=(q.searchinfo&&q.searchinfo.totalhits)||pages.length;
-    return {count:total,n:limit?pages.length:0,items:limit?pages.map(simplifyCm).filter(Boolean):[],end:!j.continue};
+    return {count:total,n:limit?pages.length:0,items:limit?pages.filter(isFossilCm).map(simplifyCm).filter(Boolean):[],end:!j.continue};
   });
 }
 /* Try GBIF first; if it fails, remember that for 5 minutes and use Wikimedia Commons instead. */
